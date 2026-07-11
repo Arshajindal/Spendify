@@ -26,6 +26,26 @@ def get_db():
     return conn
 
 
+def create_user(name, email, password):
+    """Insert a new user with a hashed password.
+
+    Returns the new user's id. Raises sqlite3.IntegrityError if the email
+    is already taken (UNIQUE constraint on users.email) — callers must
+    catch it.
+    """
+    conn = get_db()
+    try:
+        password_hash = generate_password_hash(password)
+        cursor = conn.execute(
+            "INSERT INTO users (name, email, password_hash) VALUES (?, ?, ?)",
+            (name, email, password_hash),
+        )
+        conn.commit()
+        return cursor.lastrowid
+    finally:
+        conn.close()
+
+
 def init_db():
     """Create the users and expenses tables if they don't exist yet.
 
