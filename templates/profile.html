@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+
+{% block title %}Your Profile — Spendly{% endblock %}
+
+{% block head %}
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/profile.css') }}">
+{% endblock %}
+
+{% block content %}
+
+<section class="profile-page">
+    <h1 class="profile-page-title">Your Profile</h1>
+
+    <div class="profile-card">
+        <div class="profile-avatar">{{ user.initials }}</div>
+        <div class="profile-identity">
+            <p class="profile-name">{{ user.name }}</p>
+            <p class="profile-email">{{ user.email }}</p>
+            <p class="profile-member-since">Member since {{ user.member_since }}</p>
+        </div>
+    </div>
+
+    <div class="profile-stats">
+        {% for stat in stats %}
+        <div class="profile-stat">
+            <span class="profile-stat-label">{{ stat.label }}</span>
+            <span class="profile-stat-value">{{ stat.value }}</span>
+            <span class="profile-stat-sublabel">{{ stat.sublabel }}</span>
+        </div>
+        {% endfor %}
+    </div>
+
+    <div class="profile-section">
+        <h2 class="profile-section-title">Recent transactions</h2>
+        <div class="profile-table-card">
+            <table class="profile-table">
+                <thead>
+                    <tr>
+                        <th class="profile-table-head">Date</th>
+                        <th class="profile-table-head">Description</th>
+                        <th class="profile-table-head">Category</th>
+                        <th class="profile-table-head profile-table-head-amount">Amount</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for tx in transactions %}
+                    <tr>
+                        <td class="profile-table-cell">{{ tx.date }}</td>
+                        <td class="profile-table-cell">{{ tx.description }}</td>
+                        <td class="profile-table-cell">
+                            <span class="category-badge category-badge-{{ tx.badge_class }}">{{ tx.category }}</span>
+                        </td>
+                        <td class="profile-table-cell profile-table-amount">{{ tx.amount }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="profile-section">
+        <h2 class="profile-section-title">Top categories</h2>
+        <div class="profile-breakdown-card">
+            <div class="profile-breakdown-list">
+                {% for cat in categories %}
+                <div class="profile-breakdown-row">
+                    <span class="profile-breakdown-label">{{ cat.name }}</span>
+                    <div class="profile-breakdown-track">
+                        <div class="profile-breakdown-fill profile-breakdown-fill-{{ cat.badge_class }} profile-breakdown-w-{{ cat.percent }}"></div>
+                    </div>
+                    <span class="profile-breakdown-amount">{{ cat.amount }} &middot; {{ cat.percent }}%</span>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+
+</section>
+
+{% endblock %}

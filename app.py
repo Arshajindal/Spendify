@@ -25,7 +25,7 @@ def landing():
 @app.route("/register", methods=["GET", "POST"])
 def register():
     if session.get("user_id"):
-        return redirect(url_for("landing"))
+        return redirect(url_for("profile"))
 
     if request.method == "POST":
         name = request.form.get("name", "").strip()
@@ -56,7 +56,7 @@ def register():
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if session.get("user_id"):
-        return redirect(url_for("landing"))
+        return redirect(url_for("profile"))
 
     if request.method == "GET":
         return render_template("login.html")
@@ -76,7 +76,7 @@ def login():
 
         session["user_id"] = user["id"]
         session["user_name"] = user["name"]
-        return redirect(url_for("landing"))
+        return redirect(url_for("profile"))
 
     abort(405)
 
@@ -104,7 +104,42 @@ def logout():
 
 @app.route("/profile")
 def profile():
-    return "Profile page — coming in Step 4"
+    if not session.get("user_id"):
+        return redirect(url_for("login"))
+
+    user = {
+        "name": "Demo User",
+        "email": "demo@spendly.com",
+        "initials": "DU",
+        "member_since": "March 2025",
+    }
+    stats = [
+        {"label": "Total spent", "value": "₹208.74", "sublabel": "All time"},
+        {"label": "Transactions", "value": "8", "sublabel": "Logged"},
+        {"label": "Top category", "value": "Bills", "sublabel": "₹60.00 spent"},
+    ]
+    transactions = [
+        {"date": "Jul 11, 2026", "description": "Grocery shopping", "category": "Food", "amount": "₹12.50", "badge_class": "food"},
+        {"date": "Jul 09, 2026", "description": "Electricity bill", "category": "Bills", "amount": "₹60.00", "badge_class": "bills"},
+        {"date": "Jul 07, 2026", "description": "Bus fare", "category": "Transport", "amount": "₹8.75", "badge_class": "transport"},
+        {"date": "Jul 05, 2026", "description": "Movie tickets", "category": "Entertainment", "amount": "₹15.99", "badge_class": "entertainment"},
+        {"date": "Jul 02, 2026", "description": "Pharmacy - medicines", "category": "Health", "amount": "₹45.00", "badge_class": "default"},
+    ]
+    categories = [
+        {"name": "Bills", "amount": "₹60.00", "percent": 29, "badge_class": "bills"},
+        {"name": "Health", "amount": "₹45.00", "percent": 22, "badge_class": "default"},
+        {"name": "Food", "amount": "₹34.80", "percent": 17, "badge_class": "food"},
+        {"name": "Shopping", "amount": "₹34.20", "percent": 16, "badge_class": "default"},
+        {"name": "Entertainment", "amount": "₹15.99", "percent": 8, "badge_class": "entertainment"},
+    ]
+
+    return render_template(
+        "profile.html",
+        user=user,
+        stats=stats,
+        transactions=transactions,
+        categories=categories,
+    )
 
 
 @app.route("/expenses/add")
