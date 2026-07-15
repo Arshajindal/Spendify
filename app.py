@@ -1,9 +1,20 @@
 import sqlite3
+from datetime import datetime
 
 from flask import Flask, abort, flash, redirect, render_template, request, session, url_for
 from werkzeug.security import check_password_hash
 
-from database.db import create_user, get_db, get_user_by_email, init_db, seed_db
+from database.db import (
+    create_user,
+    get_category_breakdown,
+    get_db,
+    get_expense_summary,
+    get_expenses_by_user,
+    get_user_by_email,
+    get_user_by_id,
+    init_db,
+    seed_db,
+)
 
 app = Flask(__name__)
 app.secret_key = "spendly-dev-secret-key-change-in-production"
@@ -102,36 +113,123 @@ def logout():
     return redirect(url_for("landing"))
 
 
+# ------------------------------------------------------------------ #
+# Profile page presentation helpers                                   #
+# ------------------------------------------------------------------ #
+
+CATEGORY_BADGE_CLASSES = {
+    "Food": "food",
+    "Bills": "bills",
+    "Transport": "transport",
+    "Entertainment": "entertainment",
+}
+
+
+def get_badge_class(category):
+    """Map an expense category name to its CSS badge/fill class suffix.
+
+    Categories without a dedicated CSS class (Health, Shopping, Other,
+    and any future/unknown category) fall back to "default", matching
+    the classes defined in static/css/profile.css.
+    """
+    return CATEGORY_BADGE_CLASSES.get(category, "default")
+
+
+def format_currency(amount):
+    """Format a numeric amount as a rupee string, e.g. 12.5 -> "₹12.50"."""
+    return f"₹{amount:.2f}"
+
+
+def get_initials(name):
+    """Derive up to 2 uppercase initials from a user's display name.
+
+    Takes the first letter of the first two whitespace-separated words.
+    Falls back to the first two letters if the name is a single word.
+    """
+    parts = name.split()
+    if len(parts) >= 2:
+        return (parts[0][0] + parts[1][0]).upper()
+    if parts:
+        return parts[0][:2].upper()
+    return "?"
+
+
+def format_member_since(created_at):
+    """Format a users.created_at value ("YYYY-MM-DD HH:MM:SS") as "March 2025"."""
+    return datetime.strptime(created_at, "%Y-%m-%d %H:%M:%S").strftime("%B %Y")
+
+
+def format_transaction_date(date_str):
+    """Format an expenses.date value ("YYYY-MM-DD") as "Jul 11, 2026"."""
+    return datetime.strptime(date_str, "%Y-%m-%d").strftime("%b %d, %Y")
+
+
+def build_profile_transactions(user_id):
+    """Build the transactions list for the profile template.
+
+    Fetches all expenses for the user (most recent first) and formats
+    each into the date/description/category/amount/badge_class shape
+    profile.html expects. Returns [] if the user has no expenses.
+    """
+    expenses = get_expenses_by_user(user_id)
+    return [
+        {
+            "date": format_transaction_date(expense["date"]),
+            "description": expense["description"],
+            "category": expense["category"],
+            "amount": format_currency(expense["amount"]),
+            "badge_class": get_badge_class(expense["category"]),
+        }
+        for expense in expenses
+    ]
+
+
+def build_profile_stats(user_id):
+    """Build the 3-item stats row: total spent, transaction count, top category."""
+    summary = get_expense_summary(user_id)
+    has_top = summary["top_category"] is not None
+    return [
+        {"label": "Total spent", "value": format_currency(summary["total"]), "sublabel": "All time"},
+        {"label": "Transactions", "value": str(summary["count"]), "sublabel": "Logged"},
+        {
+            "label": "Top category",
+            "value": summary["top_category"] if has_top else "—",
+            "sublabel": f"{format_currency(summary['top_category_amount'])} spent" if has_top else "No expenses yet",
+        },
+    ]
+
+
+def build_profile_categories(user_id):
+    """Build the category breakdown list for the profile template."""
+    breakdown = get_category_breakdown(user_id)
+    return [
+        {
+            "name": row["category"],
+            "amount": format_currency(row["total"]),
+            "percent": row["percent"],
+            "badge_class": get_badge_class(row["category"]),
+        }
+        for row in breakdown
+    ]
+
+
 @app.route("/profile")
 def profile():
     if not session.get("user_id"):
         return redirect(url_for("login"))
 
+    user_id = session["user_id"]
+    user_row = get_user_by_id(user_id)
+
     user = {
-        "name": "Demo User",
-        "email": "demo@spendly.com",
-        "initials": "DU",
-        "member_since": "March 2025",
+        "name": user_row["name"],
+        "email": user_row["email"],
+        "initials": get_initials(user_row["name"]),
+        "member_since": format_member_since(user_row["created_at"]),
     }
-    stats = [
-        {"label": "Total spent", "value": "₹208.74", "sublabel": "All time"},
-        {"label": "Transactions", "value": "8", "sublabel": "Logged"},
-        {"label": "Top category", "value": "Bills", "sublabel": "₹60.00 spent"},
-    ]
-    transactions = [
-        {"date": "Jul 11, 2026", "description": "Grocery shopping", "category": "Food", "amount": "₹12.50", "badge_class": "food"},
-        {"date": "Jul 09, 2026", "description": "Electricity bill", "category": "Bills", "amount": "₹60.00", "badge_class": "bills"},
-        {"date": "Jul 07, 2026", "description": "Bus fare", "category": "Transport", "amount": "₹8.75", "badge_class": "transport"},
-        {"date": "Jul 05, 2026", "description": "Movie tickets", "category": "Entertainment", "amount": "₹15.99", "badge_class": "entertainment"},
-        {"date": "Jul 02, 2026", "description": "Pharmacy - medicines", "category": "Health", "amount": "₹45.00", "badge_class": "default"},
-    ]
-    categories = [
-        {"name": "Bills", "amount": "₹60.00", "percent": 29, "badge_class": "bills"},
-        {"name": "Health", "amount": "₹45.00", "percent": 22, "badge_class": "default"},
-        {"name": "Food", "amount": "₹34.80", "percent": 17, "badge_class": "food"},
-        {"name": "Shopping", "amount": "₹34.20", "percent": 16, "badge_class": "default"},
-        {"name": "Entertainment", "amount": "₹15.99", "percent": 8, "badge_class": "entertainment"},
-    ]
+    stats = build_profile_stats(user_id)
+    transactions = build_profile_transactions(user_id)
+    categories = build_profile_categories(user_id)
 
     return render_template(
         "profile.html",
