@@ -61,6 +61,114 @@ def get_user_by_email(email):
         conn.close()
 
 
+def get_user_by_id(user_id):
+    """Return the full user row for the given id, or None if no match.
+
+    Used by profile() to populate the user info card (name, email,
+    created_at) for the logged-in user.
+    """
+    conn = get_db()
+    try:
+        return conn.execute(
+            "SELECT * FROM users WHERE id = ?",
+            (user_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+
+def get_expenses_by_user(user_id):
+    """Return all expenses for a user, most recent date first.
+
+    Used by profile() to populate the transaction history table. Ties on
+    date are broken by id descending so newer inserts still sort first.
+    """
+    conn = get_db()
+    try:
+        return conn.execute(
+            "SELECT * FROM expenses WHERE user_id = ? ORDER BY date DESC, id DESC",
+            (user_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+
+def get_expense_summary(user_id):
+    """Return total spent, transaction count, and top category for a user.
+
+    Runs two queries against the expenses table and combines them into a
+    single dict: {"total": float, "count": int, "top_category": str or
+    None, "top_category_amount": float}. If the user has zero expenses,
+    total is 0.0, count is 0, and top_category is None.
+    """
+    conn = get_db()
+    try:
+        totals = conn.execute(
+            "SELECT COUNT(*) AS count, COALESCE(SUM(amount), 0) AS total "
+            "FROM expenses WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+        top = conn.execute(
+            """
+            SELECT category, SUM(amount) AS total
+            FROM expenses
+            WHERE user_id = ?
+            GROUP BY category
+            ORDER BY total DESC
+            LIMIT 1
+            """,
+            (user_id,),
+        ).fetchone()
+        return {
+            "total": totals["total"],
+            "count": totals["count"],
+            "top_category": top["category"] if top else None,
+            "top_category_amount": top["total"] if top else 0,
+        }
+    finally:
+        conn.close()
+
+
+def get_category_breakdown(user_id):
+    """Return per-category totals and percentages for a user, highest first.
+
+    Each row is a dict {"category": str, "total": float, "percent": int}.
+    Percentages are rounded so they always sum to exactly 100 (the last
+    row absorbs any rounding remainder). Returns an empty list if the
+    user has zero expenses.
+    """
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            """
+            SELECT category, SUM(amount) AS total
+            FROM expenses
+            WHERE user_id = ?
+            GROUP BY category
+            ORDER BY total DESC
+            """,
+            (user_id,),
+        ).fetchall()
+        if not rows:
+            return []
+
+        grand_total = sum(row["total"] for row in rows)
+        breakdown = []
+        running_percent = 0
+        for i, row in enumerate(rows):
+            if i == len(rows) - 1:
+                percent = 100 - running_percent
+            else:
+                percent = round(row["total"] / grand_total * 100)
+                running_percent += percent
+            breakdown.append(
+                {"category": row["category"], "total": row["total"], "percent": percent}
+            )
+        return breakdown
+    finally:
+        conn.close()
+
+
 def init_db():
     """Create the users and expenses tables if they don't exist yet.
 
