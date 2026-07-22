@@ -1,5 +1,6 @@
+import calendar
 import sqlite3
-from datetime import datetime
+from datetime import date, datetime
 
 from flask import Flask, abort, flash, redirect, render_template, request, session, url_for
 from werkzeug.security import check_password_hash
@@ -164,14 +165,107 @@ def format_transaction_date(date_str):
     return datetime.strptime(date_str, "%Y-%m-%d").strftime("%b %d, %Y")
 
 
-def build_profile_transactions(user_id):
+def parse_date_param(value):
+    """Parse a "YYYY-MM-DD" query string value into a date, or None.
+
+    Returns None for an absent/empty value or anything that fails to
+    parse — callers treat that as "no bound", never as an error.
+    """
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def shift_months_back(base, months):
+    """Return `base` shifted back by `months` calendar months.
+
+    Clamps the day to the target month's last valid day (e.g. Mar 31
+    minus 1 month -> Feb 28) so the result is always a valid date.
+    """
+    month_index = base.month - 1 - months
+    year = base.year + month_index // 12
+    month = month_index % 12 + 1
+    day = min(base.day, calendar.monthrange(year, month)[1])
+    return date(year, month, day)
+
+
+PRESET_LABELS = {
+    "this_month": "This Month",
+    "last_3_months": "Last 3 Months",
+    "last_6_months": "Last 6 Months",
+    "all_time": "All Time",
+}
+
+
+def compute_preset_ranges(today):
+    """Return an ordered {preset_id: (date_from, date_to)} mapping.
+
+    Each range is a rolling window ending today, except "all_time" which
+    is (None, None) — no bound on either side.
+    """
+    return {
+        "this_month": (date(today.year, today.month, 1), today),
+        "last_3_months": (shift_months_back(today, 3), today),
+        "last_6_months": (shift_months_back(today, 6), today),
+        "all_time": (None, None),
+    }
+
+
+def build_profile_filters(date_from, date_to):
+    """Build the context the profile template needs to render the filter bar.
+
+    Returns the preset links (with active state), the raw values to
+    pre-fill the custom-range inputs, and a human-readable status label.
+    """
+    presets = compute_preset_ranges(date.today())
+
+    active_preset = None
+    if date_from is None and date_to is None:
+        active_preset = "all_time"
+    else:
+        for preset_id, (p_from, p_to) in presets.items():
+            if preset_id != "all_time" and p_from == date_from and p_to == date_to:
+                active_preset = preset_id
+                break
+
+    if active_preset:
+        label = f"Showing: {PRESET_LABELS[active_preset]}"
+    elif date_from and date_to:
+        label = f"Showing: {date_from.strftime('%b %d, %Y')} – {date_to.strftime('%b %d, %Y')}"
+    elif date_from:
+        label = f"Showing: from {date_from.strftime('%b %d, %Y')}"
+    else:
+        label = f"Showing: up to {date_to.strftime('%b %d, %Y')}"
+
+    return {
+        "active_preset": active_preset,
+        "presets": [
+            {
+                "id": preset_id,
+                "label": PRESET_LABELS[preset_id],
+                "date_from": p_from.isoformat() if p_from else None,
+                "date_to": p_to.isoformat() if p_to else None,
+            }
+            for preset_id, (p_from, p_to) in presets.items()
+        ],
+        "date_from": date_from.isoformat() if date_from else "",
+        "date_to": date_to.isoformat() if date_to else "",
+        "label": label,
+    }
+
+
+def build_profile_transactions(user_id, date_from=None, date_to=None):
     """Build the transactions list for the profile template.
 
-    Fetches all expenses for the user (most recent first) and formats
-    each into the date/description/category/amount/badge_class shape
-    profile.html expects. Returns [] if the user has no expenses.
+    Fetches expenses for the user (most recent first), optionally
+    restricted to [date_from, date_to], and formats each into the
+    date/description/category/amount/badge_class shape profile.html
+    expects. Returns [] if there are no matching expenses.
     """
-    expenses = get_expenses_by_user(user_id)
+    expenses = get_expenses_by_user(user_id, date_from=date_from, date_to=date_to)
     return [
         {
             "date": format_transaction_date(expense["date"]),
@@ -184,12 +278,13 @@ def build_profile_transactions(user_id):
     ]
 
 
-def build_profile_stats(user_id):
+def build_profile_stats(user_id, date_from=None, date_to=None):
     """Build the 3-item stats row: total spent, transaction count, top category."""
-    summary = get_expense_summary(user_id)
+    summary = get_expense_summary(user_id, date_from=date_from, date_to=date_to)
     has_top = summary["top_category"] is not None
+    period_label = "All time" if date_from is None and date_to is None else "In range"
     return [
-        {"label": "Total spent", "value": format_currency(summary["total"]), "sublabel": "All time"},
+        {"label": "Total spent", "value": format_currency(summary["total"]), "sublabel": period_label},
         {"label": "Transactions", "value": str(summary["count"]), "sublabel": "Logged"},
         {
             "label": "Top category",
@@ -199,9 +294,9 @@ def build_profile_stats(user_id):
     ]
 
 
-def build_profile_categories(user_id):
+def build_profile_categories(user_id, date_from=None, date_to=None):
     """Build the category breakdown list for the profile template."""
-    breakdown = get_category_breakdown(user_id)
+    breakdown = get_category_breakdown(user_id, date_from=date_from, date_to=date_to)
     return [
         {
             "name": row["category"],
@@ -221,15 +316,27 @@ def profile():
     user_id = session["user_id"]
     user_row = get_user_by_id(user_id)
 
+    date_from = parse_date_param(request.args.get("date_from"))
+    date_to = parse_date_param(request.args.get("date_to"))
+
+    if date_from and date_to and date_from > date_to:
+        flash("Start date must be before end date.", "error")
+        date_from = None
+        date_to = None
+
+    date_from_iso = date_from.isoformat() if date_from else None
+    date_to_iso = date_to.isoformat() if date_to else None
+
     user = {
         "name": user_row["name"],
         "email": user_row["email"],
         "initials": get_initials(user_row["name"]),
         "member_since": format_member_since(user_row["created_at"]),
     }
-    stats = build_profile_stats(user_id)
-    transactions = build_profile_transactions(user_id)
-    categories = build_profile_categories(user_id)
+    stats = build_profile_stats(user_id, date_from_iso, date_to_iso)
+    transactions = build_profile_transactions(user_id, date_from_iso, date_to_iso)
+    categories = build_profile_categories(user_id, date_from_iso, date_to_iso)
+    filters = build_profile_filters(date_from, date_to)
 
     return render_template(
         "profile.html",
@@ -237,6 +344,7 @@ def profile():
         stats=stats,
         transactions=transactions,
         categories=categories,
+        filters=filters,
     )
 
 

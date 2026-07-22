@@ -77,47 +77,66 @@ def get_user_by_id(user_id):
         conn.close()
 
 
-def get_expenses_by_user(user_id):
+def _date_range_clause(date_from, date_to):
+    """Build an "AND date ..." SQL fragment plus matching params for an
+    optional inclusive date range.
+
+    Returns ("", []) when both bounds are None, so callers can always
+    append the fragment and extend their params list unconditionally.
+    """
+    clause = ""
+    params = []
+    if date_from is not None:
+        clause += " AND date >= ?"
+        params.append(date_from)
+    if date_to is not None:
+        clause += " AND date <= ?"
+        params.append(date_to)
+    return clause, params
+
+
+def get_expenses_by_user(user_id, date_from=None, date_to=None):
     """Return all expenses for a user, most recent date first.
 
     Used by profile() to populate the transaction history table. Ties on
     date are broken by id descending so newer inserts still sort first.
+    When date_from/date_to (YYYY-MM-DD strings) are given, results are
+    restricted to that inclusive date range.
     """
     conn = get_db()
     try:
-        return conn.execute(
-            "SELECT * FROM expenses WHERE user_id = ? ORDER BY date DESC, id DESC",
-            (user_id,),
-        ).fetchall()
+        clause, date_params = _date_range_clause(date_from, date_to)
+        query = "SELECT * FROM expenses WHERE user_id = ?" + clause + " ORDER BY date DESC, id DESC"
+        return conn.execute(query, [user_id] + date_params).fetchall()
     finally:
         conn.close()
 
 
-def get_expense_summary(user_id):
+def get_expense_summary(user_id, date_from=None, date_to=None):
     """Return total spent, transaction count, and top category for a user.
 
     Runs two queries against the expenses table and combines them into a
     single dict: {"total": float, "count": int, "top_category": str or
     None, "top_category_amount": float}. If the user has zero expenses,
-    total is 0.0, count is 0, and top_category is None.
+    total is 0.0, count is 0, and top_category is None. When
+    date_from/date_to (YYYY-MM-DD strings) are given, both queries are
+    restricted to that inclusive date range.
     """
     conn = get_db()
     try:
+        clause, date_params = _date_range_clause(date_from, date_to)
+        params = [user_id] + date_params
+
         totals = conn.execute(
             "SELECT COUNT(*) AS count, COALESCE(SUM(amount), 0) AS total "
-            "FROM expenses WHERE user_id = ?",
-            (user_id,),
+            "FROM expenses WHERE user_id = ?" + clause,
+            params,
         ).fetchone()
         top = conn.execute(
-            """
-            SELECT category, SUM(amount) AS total
-            FROM expenses
-            WHERE user_id = ?
-            GROUP BY category
-            ORDER BY total DESC
-            LIMIT 1
-            """,
-            (user_id,),
+            "SELECT category, SUM(amount) AS total FROM expenses WHERE user_id = ?"
+            + clause
+            + " GROUP BY category ORDER BY total DESC LIMIT 1",
+            params,
         ).fetchone()
         return {
             "total": totals["total"],
@@ -129,26 +148,24 @@ def get_expense_summary(user_id):
         conn.close()
 
 
-def get_category_breakdown(user_id):
+def get_category_breakdown(user_id, date_from=None, date_to=None):
     """Return per-category totals and percentages for a user, highest first.
 
     Each row is a dict {"category": str, "total": float, "percent": int}.
     Percentages are rounded so they always sum to exactly 100 (the last
     row absorbs any rounding remainder). Returns an empty list if the
-    user has zero expenses.
+    user has zero expenses. When date_from/date_to (YYYY-MM-DD strings)
+    are given, results are restricted to that inclusive date range.
     """
     conn = get_db()
     try:
-        rows = conn.execute(
-            """
-            SELECT category, SUM(amount) AS total
-            FROM expenses
-            WHERE user_id = ?
-            GROUP BY category
-            ORDER BY total DESC
-            """,
-            (user_id,),
-        ).fetchall()
+        clause, date_params = _date_range_clause(date_from, date_to)
+        query = (
+            "SELECT category, SUM(amount) AS total FROM expenses WHERE user_id = ?"
+            + clause
+            + " GROUP BY category ORDER BY total DESC"
+        )
+        rows = conn.execute(query, [user_id] + date_params).fetchall()
         if not rows:
             return []
 
