@@ -1,6 +1,8 @@
 import calendar
+import math
 import sqlite3
 from datetime import date, datetime
+from functools import wraps
 
 from flask import Flask, abort, flash, redirect, render_template, request, session, url_for
 from werkzeug.security import check_password_hash
@@ -24,6 +26,16 @@ app.secret_key = "spendly-dev-secret-key-change-in-production"
 with app.app_context():
     init_db()
     seed_db()
+
+
+def login_required(view):
+    """Redirect to /login when no user is logged in, otherwise call view."""
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        if not session.get("user_id"):
+            return redirect(url_for("login"))
+        return view(*args, **kwargs)
+    return wrapped
 
 
 # ------------------------------------------------------------------ #
@@ -312,10 +324,8 @@ def build_profile_categories(user_id, date_from=None, date_to=None):
 
 
 @app.route("/profile")
+@login_required
 def profile():
-    if not session.get("user_id"):
-        return redirect(url_for("login"))
-
     user_id = session["user_id"]
     user_row = get_user_by_id(user_id)
 
@@ -351,11 +361,29 @@ def profile():
     )
 
 
-@app.route("/expenses/add", methods=["GET", "POST"])
-def add_expense():
-    if not session.get("user_id"):
-        return redirect(url_for("login"))
+def validate_expense_form(form_values):
+    """Return an error message for the first invalid field, or None if valid."""
+    try:
+        amount = float(form_values["amount"])
+    except ValueError:
+        return "Enter an amount greater than 0."
+    if not math.isfinite(amount) or amount <= 0:
+        return "Enter an amount greater than 0."
 
+    if form_values["category"] not in EXPENSE_CATEGORIES:
+        return "Select a valid category."
+
+    try:
+        datetime.strptime(form_values["date"], "%Y-%m-%d")
+    except ValueError:
+        return "Enter a valid date."
+
+    return None
+
+
+@app.route("/expenses/add", methods=["GET", "POST"])
+@login_required
+def add_expense():
     form_values = {
         "amount": "",
         "category": "",
@@ -367,28 +395,21 @@ def add_expense():
         form_values["amount"] = request.form.get("amount", "").strip()
         form_values["category"] = request.form.get("category", "").strip()
         form_values["date"] = request.form.get("date", "").strip()
-        form_values["description"] = request.form.get("description", "").strip()
+        form_values["description"] = request.form.get("description", "").strip()[:200]
 
-        try:
-            amount = float(form_values["amount"])
-            if amount <= 0:
-                raise ValueError
-        except ValueError:
-            flash("Enter an amount greater than 0.", "error")
-            return render_template("add_expense.html", categories=EXPENSE_CATEGORIES, form=form_values)
-
-        if form_values["category"] not in EXPENSE_CATEGORIES:
-            flash("Select a valid category.", "error")
-            return render_template("add_expense.html", categories=EXPENSE_CATEGORIES, form=form_values)
-
-        try:
-            datetime.strptime(form_values["date"], "%Y-%m-%d")
-        except ValueError:
-            flash("Enter a valid date.", "error")
+        error = validate_expense_form(form_values)
+        if error:
+            flash(error, "error")
             return render_template("add_expense.html", categories=EXPENSE_CATEGORIES, form=form_values)
 
         description = form_values["description"] or None
-        create_expense(session["user_id"], amount, form_values["category"], form_values["date"], description)
+        create_expense(
+            session["user_id"],
+            float(form_values["amount"]),
+            form_values["category"],
+            form_values["date"],
+            description,
+        )
         flash("Expense added successfully.", "success")
         return redirect(url_for("profile"))
 
