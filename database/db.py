@@ -46,6 +46,25 @@ def create_user(name, email, password):
         conn.close()
 
 
+def create_expense(user_id, amount, category, date, description):
+    """Insert a new expense for a user.
+
+    Returns the new expense's id. `description` should be None (not "")
+    when the field was left blank.
+    """
+    conn = get_db()
+    try:
+        cursor = conn.execute(
+            "INSERT INTO expenses (user_id, amount, category, date, description) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (user_id, amount, category, date, description),
+        )
+        conn.commit()
+        return cursor.lastrowid
+    finally:
+        conn.close()
+
+
 def get_user_by_email(email):
     """Return the full user row for the given email, or None if no match.
 

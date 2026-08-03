@@ -6,6 +6,7 @@ from flask import Flask, abort, flash, redirect, render_template, request, sessi
 from werkzeug.security import check_password_hash
 
 from database.db import (
+    create_expense,
     create_user,
     get_category_breakdown,
     get_db,
@@ -124,6 +125,8 @@ CATEGORY_BADGE_CLASSES = {
     "Transport": "transport",
     "Entertainment": "entertainment",
 }
+
+EXPENSE_CATEGORIES = ["Food", "Bills", "Transport", "Entertainment", "Health", "Shopping", "Other"]
 
 
 def get_badge_class(category):
@@ -348,9 +351,48 @@ def profile():
     )
 
 
-@app.route("/expenses/add")
+@app.route("/expenses/add", methods=["GET", "POST"])
 def add_expense():
-    return "Add expense — coming in Step 7"
+    if not session.get("user_id"):
+        return redirect(url_for("login"))
+
+    form_values = {
+        "amount": "",
+        "category": "",
+        "date": date.today().isoformat(),
+        "description": "",
+    }
+
+    if request.method == "POST":
+        form_values["amount"] = request.form.get("amount", "").strip()
+        form_values["category"] = request.form.get("category", "").strip()
+        form_values["date"] = request.form.get("date", "").strip()
+        form_values["description"] = request.form.get("description", "").strip()
+
+        try:
+            amount = float(form_values["amount"])
+            if amount <= 0:
+                raise ValueError
+        except ValueError:
+            flash("Enter an amount greater than 0.", "error")
+            return render_template("add_expense.html", categories=EXPENSE_CATEGORIES, form=form_values)
+
+        if form_values["category"] not in EXPENSE_CATEGORIES:
+            flash("Select a valid category.", "error")
+            return render_template("add_expense.html", categories=EXPENSE_CATEGORIES, form=form_values)
+
+        try:
+            datetime.strptime(form_values["date"], "%Y-%m-%d")
+        except ValueError:
+            flash("Enter a valid date.", "error")
+            return render_template("add_expense.html", categories=EXPENSE_CATEGORIES, form=form_values)
+
+        description = form_values["description"] or None
+        create_expense(session["user_id"], amount, form_values["category"], form_values["date"], description)
+        flash("Expense added successfully.", "success")
+        return redirect(url_for("profile"))
+
+    return render_template("add_expense.html", categories=EXPENSE_CATEGORIES, form=form_values)
 
 
 @app.route("/expenses/<int:id>/edit")
